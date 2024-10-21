@@ -133,16 +133,21 @@ nextGrids grid =
     replace2D size i v = let (x, y) = (i `quot` size, i `mod` size) in replace x (replace y (const v))
     replace p f xs = [if i == p then f x else x | (x, i) <- zip xs [0..]]
 
--- Solve the grid using backtracking
-solve :: Grid -> Maybe Grid
-solve grid = pruneGrid grid >>= solve'
+-- Solve the grid using backtracking and count the number of solutions
+solve :: Grid -> IO (Maybe Grid, Int)
+solve grid = case pruneGrid grid of
+    Nothing -> return (Nothing, 0)  -- Pruning resulted in an impossible state
+    Just g -> solve' g
   where
     solve' g
-      | isGridInvalid g = Nothing
-      | isGridFilled g  = Just g
-      | otherwise       =
+      | isGridInvalid g = return (Nothing, 0)
+      | isGridFilled g  = return (Just g, 1)
+      | otherwise = do
           let (grid1, grid2) = nextGrids g
-          in solve grid1 <|> solve grid2
+          (sol1, count1) <- solve grid1
+          if count1 >= 2 then return (sol1, count1) else do
+              (sol2, count2) <- solve grid2
+              return (sol2, count1 + count2)
 
 -- Main function to solve the Sudoku and print intermediate steps
 numSolutions :: Board -> IO Solutions
@@ -159,13 +164,16 @@ numSolutions board = do
         Just prunedBoard -> do
             putStrLn "\nBoard after pruning:"
             printBoard prunedBoard
-            case solve prunedBoard of
-                Nothing    -> do
+            (solvedGrid, count) <- solve prunedBoard
+            case count of
+                0 -> do
                     putStrLn "\nNo solution found."
                     return NoSolution
-                Just solvedGrid -> do
+                1 -> do
                     putStrLn "\nSolved Grid:"
-                    printBoard solvedGrid
-                    return UniqueSolution  -- In a full implementation, you may need to check for multiple solutions.
-
+                    printBoard (fromJust solvedGrid)
+                    return UniqueSolution
+                _ -> do
+                    putStrLn "\nMultiple solutions found."
+                    return MultipleSolutions  -- Return the correct Solutions type
 
