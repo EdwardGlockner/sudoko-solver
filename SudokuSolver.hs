@@ -1,78 +1,171 @@
-module SudokuSolver (Board, Solutions(..), author, nickname, numSolutions) where
+module SudokuSolver(Board, Solutions(..), author, nickname, numSolutions) where
 
-import Sudoku (Board)
+import Sudoku(Board, Solutions(..))
+import qualified Data.List as List
+import Data.Maybe (fromJust)
+import Data.Function (on)
+import Control.Monad (guard)
+import Control.Applicative ((<|>))
+
+-- /\/\/\ DO NOT MODIFY THE PRECEDING LINES /\/\/\
 
 author :: String
-author = "Your First and Last Name"  -- replace with your name
+author = "Your Name"  -- Replace with your first and last name
 
 nickname :: String
-nickname = "YourNickname"  -- replace with your nickname
+nickname = "Your Nickname"  -- Replace with your nickname for your solver
 
--- Define a new Solutions data type
-data Solutions = UniqueSolution | MultipleSolutions | NoSolution
-    deriving (Show, Eq)
+-- Define Cell type
+data Cell = Fixed Int | Possible [Int] deriving (Show, Eq)
 
--- Returns the number of unique solutions or whether there are multiple or no solutions.
-numSolutions :: Board -> Solutions
-numSolutions board = countSolutions board
+type Row = [Cell]
+type Grid = [Row]
+
+-- Function to create a list of possible values based on the size of the board
+possibleValues :: Int -> [Int]
+possibleValues size = [1..size]
+
+-- Function to convert a board to a list of Rows of Cells
+convertBoardToCells :: Board -> [Row]
+convertBoardToCells board = let size = length board in map (map (\value -> convertToCell value size)) board
+
+-- Convert an integer to a Cell, where 0 represents an empty cell.
+convertToCell :: Int -> Int -> Cell
+convertToCell 0 size = Possible (possibleValues size)
+convertToCell n _ = Fixed n
+
+-- Function to regroup cells back into rows
+groupCells :: [Cell] -> Int -> [[Cell]]
+groupCells cells size = chunksOf size cells
+
+-- Custom chunksOf function to split a list into chunks of a given size
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf _ [] = []
+chunksOf n xs = take n xs : chunksOf n (drop n xs)
+
+-- Function to print the board
+printBoard :: [[Cell]] -> IO ()
+printBoard board = mapM_ putStrLn formattedRows
   where
-    countSolutions b
-      | isSolved b = UniqueSolution
-      | otherwise =
-          case findEmpty b of
-            Nothing -> NoSolution
-            Just (row, col) ->
-              let validNumbers = possibleValues b (row, col)
-              in if null validNumbers 
-                 then NoSolution 
-                 else classifySolutions validNumbers row col b
+    formattedRows = map (unwords . map showCell) board
 
--- Checks if the board is solved (no empty cells)
-isSolved :: Board -> Bool
-isSolved b = all (all (/= 0)) b
+-- Function to format each cell for display
+showCell :: Cell -> String
+showCell (Possible xs) = "[" ++ unwords (map show xs) ++ "]"
+showCell (Fixed num) = show num
 
--- Find the first empty cell using Minimum Remaining Values heuristic
-findEmpty :: Board -> Maybe (Int, Int)
-findEmpty b = foldr minNothing Nothing [(r, c) | r <- [0..size-1], c <- [0..size-1], b !! r !! c == 0]
+-- Function to prune cells in a single row, column, or subgrid
+pruneCells :: [Cell] -> Maybe [Cell]
+pruneCells cells = traverse pruneCell cells
   where
-    size = length b
-    minNothing :: (Int, Int) -> Maybe (Int, Int) -> Maybe (Int, Int)
-    minNothing pos Nothing = Just pos
-    minNothing pos (Just best)
-      | length (possibleValues b pos) < length (possibleValues b best) = Just pos
-      | otherwise = Just best
+    fixeds = [x | Fixed x <- cells]
 
--- Get possible values for a given cell
-possibleValues :: Board -> (Int, Int) -> [Int]
-possibleValues b (r, c) = [num | num <- [1 .. size], valid b (r, c) num]
-  where size = length b
+    pruneCell (Possible xs) = case xs List.\\ fixeds of
+      []  -> Nothing
+      [y] -> Just $ Fixed y
+      ys  -> Just $ Possible ys
+    pruneCell x = Just x
 
--- Check if placing a number is valid
-valid :: Board -> (Int, Int) -> Int -> Bool
-valid b (r, c) num = notElem num (getRow r ++ getCol c ++ getBox r c)
+-- Convert the subgrids of a grid into rows for pruning
+subGridsToRows :: Grid -> Grid
+subGridsToRows grid =
+  let size = length grid
+      subgridSize = round (sqrt (fromIntegral size))  -- Dynamic subgrid size
+      regrouped = concat [concatMap (take subgridSize) $ chunksOf subgridSize rows | rows <- chunksOf subgridSize grid]
+  in regrouped
+
+-- Prune the grid iteratively until no more changes occur
+pruneGrid :: Grid -> Maybe Grid
+pruneGrid = fixM pruneStep
   where
-    size = length b
-    getRow r = b !! r
-    getCol c = [b !! i !! c | i <- [0..size-1]]
-    getBox r c = [b !! i !! j | i <- [boxRowStart .. boxRowEnd], j <- [boxColStart .. boxColEnd]]
-      where
-        boxRowStart = (r `div` boxSize) * boxSize
-        boxColStart = (c `div` boxSize) * boxSize
-        boxRowEnd = boxRowStart + boxSize - 1
-        boxColEnd = boxColStart + boxSize - 1
-        boxSize = round (fromIntegral size ** 0.5)
+    pruneStep :: Grid -> Maybe Grid
+    pruneStep grid = do
+      rowsPruned <- traverse pruneCells grid
+      colsPruned <- fmap List.transpose . traverse pruneCells . List.transpose $ rowsPruned
+      subGridsPruned <- fmap subGridsToRows . traverse pruneCells . subGridsToRows $ colsPruned
+      return subGridsPruned
 
--- Classify the number of solutions based on the count
-classifySolutions :: [Int] -> Int -> Int -> Board -> Solutions
-classifySolutions validNumbers row col b =
-  let results = [numSolutions (placeNumber b (row, col) num) | num <- validNumbers]
-  in case results of
-       [] -> NoSolution
-       _ -> if all (== UniqueSolution) results then UniqueSolution
-            else if any (== MultipleSolutions) results then MultipleSolutions
-            else NoSolution
+    fixM :: Eq a => (a -> Maybe a) -> a -> Maybe a
+    fixM f x = f x >>= \x' -> if x' == x then return x else fixM f x'
 
--- Place a number on the board and return a new board
-placeNumber :: Board -> (Int, Int) -> Int -> Board
-placeNumber b (r, c) num = take r b ++ [take c (b !! r) ++ [num] ++ drop (c + 1) (b !! r)] ++ drop (r + 1) b
+-- Check if the grid is fully filled (no possible cells)
+isGridFilled :: Grid -> Bool
+isGridFilled grid = null [() | Possible _ <- concat grid]
+
+-- Check if the grid is invalid (duplicates or cells with no possibilities)
+isGridInvalid :: Grid -> Bool
+isGridInvalid grid =
+  any isInvalidRow grid
+  || any isInvalidRow (List.transpose grid)
+  || any isInvalidRow (subGridsToRows grid)
+  where
+    isInvalidRow row =
+      let fixeds = [x | Fixed x <- row]
+          emptyPossibles = [x | Possible x <- row, null x]
+      in hasDups fixeds || not (null emptyPossibles)
+
+    hasDups :: [Int] -> Bool
+    hasDups l = hasDups' l []
+
+    hasDups' [] _ = False
+    hasDups' (y:ys) xs
+      | y `elem` xs = True
+      | otherwise   = hasDups' ys (y:xs)
+
+-- Generate the next two possible grids for backtracking
+nextGrids :: Grid -> (Grid, Grid)
+nextGrids grid =
+  let size = length grid -- Get the size of the grid
+      (i, first@(Fixed _), rest) = fixCell . List.minimumBy (compare `on` possibilityCount) . filter isPossible . zip [0..] . concat $ grid
+  in (replace2D size i first grid, replace2D size i rest grid)
+  where
+    isPossible (_, Possible _) = True
+    isPossible _ = False
+
+    possibilityCount (_, Possible xs) = length xs
+    possibilityCount (_, Fixed _) = 1
+
+    fixCell (i, Possible [x, y]) = (i, Fixed x, Fixed y)
+    fixCell (i, Possible (x:xs)) = (i, Fixed x, Possible xs)
+    fixCell _ = error "Unexpected case"
+
+    replace2D :: Int -> Int -> Cell -> Grid -> Grid
+    replace2D size i v = let (x, y) = (i `quot` size, i `mod` size) in replace x (replace y (const v))
+    replace p f xs = [if i == p then f x else x | (x, i) <- zip xs [0..]]
+
+-- Solve the grid using backtracking
+solve :: Grid -> Maybe Grid
+solve grid = pruneGrid grid >>= solve'
+  where
+    solve' g
+      | isGridInvalid g = Nothing
+      | isGridFilled g  = Just g
+      | otherwise       =
+          let (grid1, grid2) = nextGrids g
+          in solve grid1 <|> solve grid2
+
+-- Main function to solve the Sudoku and print intermediate steps
+numSolutions :: Board -> IO Solutions
+numSolutions board = do
+    let boardCells = convertBoardToCells board
+    putStrLn "Initial board:"
+    printBoard boardCells
+    
+    let maybePrunedBoard = pruneGrid boardCells
+    case maybePrunedBoard of
+        Nothing -> do
+            putStrLn "Pruning resulted in an impossible state."
+            return NoSolution
+        Just prunedBoard -> do
+            putStrLn "\nBoard after pruning:"
+            printBoard prunedBoard
+            case solve prunedBoard of
+                Nothing    -> do
+                    putStrLn "\nNo solution found."
+                    return NoSolution
+                Just solvedGrid -> do
+                    putStrLn "\nSolved Grid:"
+                    printBoard solvedGrid
+                    return UniqueSolution  -- In a full implementation, you may need to check for multiple solutions.
+
 
