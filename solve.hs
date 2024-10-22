@@ -32,7 +32,7 @@ splitByComma xs = case break (== ',') xs of
 main :: IO ()
 main = do
     --let filePath = "dataset/test.txt"  -- Change this to your desired board file
-    let filePath = "dataset/test_unique.txt"
+    let filePath = "dataset/board3.txt"
     maybeBoard <- readBoard filePath  -- Read the board
     case maybeBoard of
         Just board -> do

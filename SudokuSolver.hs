@@ -2,6 +2,7 @@ module SudokuSolver(Board, Solutions(..), author, nickname, numSolutions) where
 
 import Sudoku(Board, Solutions(..))
 import qualified Data.List as List
+import qualified Data.Map as Map
 import Data.Maybe (fromJust)
 import Data.Function (on)
 import Control.Monad (guard)
@@ -17,7 +18,6 @@ nickname = "Your Nickname"  -- Replace with your nickname for your solver
 
 -- Define Cell type
 data Cell = Fixed Int | Possible [Int] deriving (Show, Eq)
-
 type Row = [Cell]
 type Grid = [Row]
 
@@ -54,27 +54,63 @@ showCell :: Cell -> String
 showCell (Possible xs) = "[" ++ unwords (map show xs) ++ "]"
 showCell (Fixed num) = show num
 
--- Function to prune cells in a single row, column, or subgrid
-pruneCells :: [Cell] -> Maybe [Cell]
-pruneCells cells = traverse pruneCell cells
+-- Check if a cell is possible
+isPossible :: Cell -> Bool
+isPossible (Possible _) = True
+isPossible _            = False
+
+-- Function to get exclusive possibilities from a row
+exclusivePossibilities :: [Cell] -> [[Int]]
+exclusivePossibilities row =
+  let indexedCells = zip [1..] row
+      possibleCells = filter (isPossible . snd) indexedCells
+      valueMap = List.foldl' (\acc (i, Possible xs) -> List.foldl' (\acc' x -> Map.insertWith prepend x [i] acc') acc xs) Map.empty possibleCells
+      filteredMap = Map.filter ((< 4) . length) valueMap
+      resultMap = Map.foldlWithKey' (\acc x is -> Map.insertWith prepend is [x] acc) Map.empty filteredMap
+      finalMap = Map.filterWithKey (\is xs -> length is == length xs) resultMap
+  in Map.elems finalMap
+  where
+    prepend ~[y] ys = y:ys
+
+-- Function to create a Cell from a list of possible values
+makeCell :: [Int] -> Maybe Cell
+makeCell ys = case ys of
+  []  -> Nothing
+  [y] -> Just $ Fixed y
+  _   -> Just $ Possible ys
+
+-- Prune cells by removing fixed values
+pruneCellsByFixed :: [Cell] -> Maybe [Cell]
+pruneCellsByFixed cells = traverse pruneCell cells
   where
     fixeds = [x | Fixed x <- cells]
+    pruneCell (Possible xs) = makeCell (xs List.\\ fixeds)
+    pruneCell x             = Just x
 
-    pruneCell (Possible xs) = case xs List.\\ fixeds of
-      []  -> Nothing
-      [y] -> Just $ Fixed y
-      ys  -> Just $ Possible ys
-    pruneCell x = Just x
+-- Prune cells using exclusive possibilities
+pruneCellsByExclusives :: [Cell] -> Maybe [Cell]
+pruneCellsByExclusives cells = case exclusives of
+  [] -> Just cells
+  _  -> traverse pruneCell cells
+  where
+    exclusives    = exclusivePossibilities cells
+    allExclusives = concat exclusives
+    pruneCell cell@(Fixed _) = Just cell
+    pruneCell cell@(Possible xs)
+      | intersection `elem` exclusives = makeCell intersection
+      | otherwise                      = Just cell
+      where
+        intersection = xs `List.intersect` allExclusives
 
--- Convert the subgrids of a grid into rows for pruning
-subGridsToRows :: Grid -> Grid
-subGridsToRows grid =
-  let size = length grid
-      subgridSize = round (sqrt (fromIntegral size))  -- Dynamic subgrid size
-      regrouped = concat [concatMap (take subgridSize) $ chunksOf subgridSize rows | rows <- chunksOf subgridSize grid]
-  in regrouped
+-- Fix point combinator for functions returning Maybe
+fixM :: (Eq t, Monad m) => (t -> m t) -> t -> m t
+fixM f x = f x >>= \x' -> if x' == x then return x else fixM f x'
 
--- Prune the grid iteratively until no more changes occur
+-- Function to prune cells using both fixed values and exclusive possibilities
+pruneCells :: [Cell] -> Maybe [Cell]
+pruneCells cells = fixM pruneCellsByFixed cells >>= fixM pruneCellsByExclusives
+
+-- Function to prune the grid iteratively until no more changes occur
 pruneGrid :: Grid -> Maybe Grid
 pruneGrid = fixM pruneStep
   where
@@ -85,8 +121,13 @@ pruneGrid = fixM pruneStep
       subGridsPruned <- fmap subGridsToRows . traverse pruneCells . subGridsToRows $ colsPruned
       return subGridsPruned
 
-    fixM :: Eq a => (a -> Maybe a) -> a -> Maybe a
-    fixM f x = f x >>= \x' -> if x' == x then return x else fixM f x'
+-- Convert the subgrids of a grid into rows for pruning
+subGridsToRows :: Grid -> Grid
+subGridsToRows grid =
+  let size = length grid
+      subgridSize = round (sqrt (fromIntegral size))  -- Dynamic subgrid size
+      regrouped = concat [concatMap (take subgridSize) $ chunksOf subgridSize rows | rows <- chunksOf subgridSize grid]
+  in regrouped
 
 -- Check if the grid is fully filled (no possible cells)
 isGridFilled :: Grid -> Bool
@@ -175,5 +216,5 @@ numSolutions board = do
                     return UniqueSolution
                 _ -> do
                     putStrLn "\nMultiple solutions found."
-                    return MultipleSolutions  -- Return the correct Solutions type
+                    return MultipleSolutions
 
