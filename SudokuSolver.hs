@@ -126,8 +126,7 @@ subGridsToRows :: Grid -> Grid
 subGridsToRows grid =
   let size = length grid
       subgridSize = round (sqrt (fromIntegral size))  -- Dynamic subgrid size
-      regrouped = concat [concatMap (take subgridSize) $ chunksOf subgridSize rows | rows <- chunksOf subgridSize grid]
-  in regrouped
+  in concatMap (map concat . List.transpose) $ chunksOf subgridSize [chunksOf subgridSize row | row <- grid]
 
 -- Check if the grid is fully filled (no possible cells)
 isGridFilled :: Grid -> Bool
@@ -140,6 +139,7 @@ isGridInvalid grid =
   || any isInvalidRow (List.transpose grid)
   || any isInvalidRow (subGridsToRows grid)
   where
+    isInvalidRow :: [Cell] -> Bool
     isInvalidRow row =
       let fixeds = [x | Fixed x <- row]
           emptyPossibles = [x | Possible x <- row, null x]
@@ -148,6 +148,7 @@ isGridInvalid grid =
     hasDups :: [Int] -> Bool
     hasDups l = hasDups' l []
 
+    hasDups' :: [Int] -> [Int] -> Bool
     hasDups' [] _ = False
     hasDups' (y:ys) xs
       | y `elem` xs = True
@@ -177,18 +178,23 @@ nextGrids grid =
 -- Solve the grid using backtracking and count the number of solutions
 solve :: Grid -> IO (Maybe Grid, Int)
 solve grid = case pruneGrid grid of
-    Nothing -> return (Nothing, 0)  -- Pruning resulted in an impossible state
+    Nothing -> return (Nothing, 0)
     Just g -> solve' g
-  where
-    solve' g
-      | isGridInvalid g = return (Nothing, 0)
-      | isGridFilled g  = return (Just g, 1)
-      | otherwise = do
-          let (grid1, grid2) = nextGrids g
-          (sol1, count1) <- solve grid1
-          if count1 >= 2 then return (sol1, count1) else do
-              (sol2, count2) <- solve grid2
-              return (sol2, count1 + count2)
+
+solve' :: Grid -> IO (Maybe Grid, Int)
+solve' g
+  | isGridInvalid g = return (Nothing, 0)
+  | isGridFilled g  = do
+      putStrLn "\nFound a solution:"
+      printBoard g
+      return (Just g, 1)
+  | otherwise = do
+      let (grid1, grid2) = nextGrids g
+      (sol1, count1) <- solve grid1
+      if count1 >= 2 then return (sol1, count1) else do
+          (sol2, count2) <- solve grid2
+          return (sol2, count1 + count2)
+
 
 -- Main function to solve the Sudoku and print intermediate steps
 numSolutions :: Board -> IO Solutions
